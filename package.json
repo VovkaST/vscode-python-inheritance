@@ -7,7 +7,7 @@
   "publisher": "KorotkoVladimir",
   "repository": {
     "type": "git",
-    "url": "https://github.com/KorotkoVladimir/vscode-python-inheritance"
+    "url": "https://github.com/VovkaST/vscode-python-inheritance"
   },
   "engines": {
     "vscode": "^1.90.0"
