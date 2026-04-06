@@ -1,0 +1,52 @@
+{
+  "name": "vscode-python-inheritance",
+  "displayName": "Python Inheritance Visualizer",
+  "description": "Visualize Python class inheritance and method overrides with Gutter icons and CodeLens, just like in PyCharm.",
+  "version": "0.1.4",
+  "license": "MIT",
+  "publisher": "KorotkoVladimir",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KorotkoVladimir/vscode-python-inheritance"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionDependencies": [
+    "ms-python.python",
+    "ms-python.vscode-pylance"
+  ],
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:python"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "pythonInheritance.goToSuper",
+        "title": "Go to Super Implementation"
+      },
+      {
+        "command": "pythonInheritance.goToSub",
+        "title": "Go to Sub Implementation"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "yarn run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "^3.7.1",
+    "typescript": "^5.4.5"
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+}
