@@ -11,6 +11,7 @@ export interface ClassBase {
   name: string;
   uri: string;
   range: SerializedRange;
+  resolvePos?: { line: number, character: number };
 }
 
 export interface ClassNode {

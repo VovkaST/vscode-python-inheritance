@@ -2,7 +2,7 @@
   "name": "vscode-python-inheritance",
   "displayName": "Python Inheritance Visualizer",
   "description": "Visualize Python class inheritance and method overrides with Gutter icons and CodeLens, just like in PyCharm.",
-  "version": "0.3.1",
+  "version": "0.3.11",
   "license": "MIT",
   "publisher": "KorotkoVladimir",
   "repository": {
@@ -40,6 +40,10 @@
       {
         "command": "pythonInheritance.reindex",
         "title": "Python Inheritance: Reindex Project"
+      },
+      {
+        "command": "pythonInheritance.showTargets",
+        "title": "Show Inheritance Targets"
       }
     ],
     "configuration": {
@@ -79,6 +83,13 @@
           "type": "boolean",
           "default": true,
           "description": "Perform a background scan of all Python files in the workspace on extension startup."
+        },
+        "pythonInheritance.indexingConcurrency": {
+          "type": "number",
+          "default": 6,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Parallel Indexing Threads: Maximum number of files analyzed concurrently. Increase to speed up indexing on multi-core systems."
         }
       }
     }
