@@ -35,22 +35,22 @@ export async function activate(context: vscode.ExtensionContext) {
     const both: vscode.Range[] = [];
 
     for (const node of fileData.classes) {
-        const mro = store.getFullMRO(editor.document.uri.toString(), node.className);
-        const subClasses = store.getSubclasses(editor.document.uri.toString(), node.className);
+      const mro = store.getFullMRO(editor.document.uri.toString(), node.className);
+      const subClasses = store.getSubclasses(editor.document.uri.toString(), node.className);
 
-        for (const method of node.methods) {
-            const range = InheritanceStore.toRange(method.selectionRange);
-            const isOverride = mro.some(p => p.methods.some(pm => pm.name === method.name));
-            const isOverridden = subClasses.some(s => s.methods.some(sm => sm.name === method.name));
+      for (const method of node.methods) {
+        const range = InheritanceStore.toRange(method.selectionRange);
+        const isOverride = mro.some(p => p.methods.some(pm => pm.name === method.name));
+        const isOverridden = subClasses.some(s => s.methods.some(sm => sm.name === method.name));
 
-            if (isOverride && isOverridden) {
-                both.push(range);
-            } else if (isOverride) {
-                overrides.push(range);
-            } else if (isOverridden) {
-                overridden.push(range);
-            }
+        if (isOverride && isOverridden) {
+          both.push(range);
+        } else if (isOverride) {
+          overrides.push(range);
+        } else if (isOverridden) {
+          overridden.push(range);
         }
+      }
     }
 
     editor.setDecorations(overridesDecorationType, overrides);
@@ -66,55 +66,93 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!symbols) return undefined;
 
     const classes: ClassNode[] = [];
-    
+
     async function processSymbols(syms: vscode.DocumentSymbol[]) {
-        for (const s of syms) {
-            if (s.kind === vscode.SymbolKind.Class || s.kind === vscode.SymbolKind.Interface) {
-                const methods = s.children
-                    .filter(c => c.kind === vscode.SymbolKind.Method || c.kind === vscode.SymbolKind.Function)
-                    .map(m => ({
-                        name: m.name,
-                        range: InheritanceStore.fromRange(m.range),
-                        selectionRange: InheritanceStore.fromRange(m.selectionRange)
-                    }));
+      for (const s of syms) {
+        if (s.kind === vscode.SymbolKind.Class || s.kind === vscode.SymbolKind.Interface) {
+          const methods = s.children
+            .filter(c => c.kind === vscode.SymbolKind.Method || c.kind === vscode.SymbolKind.Function)
+            .map(m => ({
+              name: m.name,
+              range: InheritanceStore.fromRange(m.range),
+              selectionRange: InheritanceStore.fromRange(m.selectionRange)
+            }));
 
-                // Parse bases
-                const bases: any[] = [];
-                const lineText = document.lineAt(s.range.start.line).text;
-                const match = lineText.match(/class\s+\w+\s*\(([^)]+)\)/);
-                if (match) {
-                    const baseNames = match[1].split(',').map(n => n.trim());
-                    for (const name of baseNames) {
-                        const namePos = lineText.indexOf(name);
-                        const definitions = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
-                            'vscode.executeDefinitionProvider',
-                            document.uri,
-                            new vscode.Position(s.range.start.line, namePos)
-                        );
-                        if (definitions && definitions.length > 0) {
-                            const def = definitions[0];
-                            const uri = 'uri' in def ? def.uri : def.targetUri;
-                            const range = 'range' in def ? def.range : def.targetRange;
-                            bases.push({
-                                name: name.includes('.') ? name.split('.').pop()! : name,
-                                uri: uri.toString(),
-                                range: InheritanceStore.fromRange(range)
-                            });
-                        }
-                    }
-                }
+          // Parse bases
+          const bases: any[] = [];
+          let headerText = "";
+          let currentLine = s.range.start.line;
+          let openParens = 0;
+          let foundColon = false;
 
-                classes.push({
-                    uri: document.uri.toString(),
-                    className: s.name,
-                    range: InheritanceStore.fromRange(s.range),
-                    selectionRange: InheritanceStore.fromRange(s.selectionRange),
-                    methods,
-                    bases
-                });
+          // Collect header lines until we find the colon
+          while (currentLine < document.lineCount && currentLine <= s.range.end.line) {
+            const line = document.lineAt(currentLine).text;
+            headerText += line + "\n";
+
+            const commentIdx = line.indexOf('#');
+            const codePart = commentIdx === -1 ? line : line.substring(0, commentIdx);
+
+            for (const char of codePart) {
+              if (char === '(') openParens++;
+              else if (char === ')') openParens--;
+              else if (char === ':' && openParens === 0) {
+                foundColon = true;
+                break;
+              }
             }
-            if (s.children) await processSymbols(s.children);
+            if (foundColon) break;
+            currentLine++;
+          }
+
+          const headerMatch = headerText.match(/class\s+\w+\s*(?:\(([\s\S]*?)\))?\s*:/);
+          if (headerMatch && headerMatch[1]) {
+            const baseNamesStr = headerMatch[1];
+            const baseNames = baseNamesStr.split(',').map(n => n.trim()).filter(n => n.length > 0);
+
+            let lastOffset = 0;
+            for (const name of baseNames) {
+              // Skip keywords like metaclass=
+              if (name.includes('=')) continue;
+
+              const nameOffset = headerText.indexOf(name, lastOffset);
+              if (nameOffset === -1) continue;
+              lastOffset = nameOffset + name.length;
+
+              // Convert offset to Position
+              const linesBefore = headerText.substring(0, nameOffset).split('\n');
+              const baseLine = s.range.start.line + linesBefore.length - 1;
+              const baseChar = linesBefore[linesBefore.length - 1].length;
+
+              const definitions = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
+                'vscode.executeDefinitionProvider',
+                document.uri,
+                new vscode.Position(baseLine, baseChar)
+              );
+              if (definitions && definitions.length > 0) {
+                const def = definitions[0];
+                const uri = 'uri' in def ? def.uri : def.targetUri;
+                const range = 'range' in def ? def.range : def.targetRange;
+                bases.push({
+                  name: name.includes('.') ? name.split('.').pop()! : name,
+                  uri: uri.toString(),
+                  range: InheritanceStore.fromRange(range)
+                });
+              }
+            }
+          }
+
+          classes.push({
+            uri: document.uri.toString(),
+            className: s.name,
+            range: InheritanceStore.fromRange(s.range),
+            selectionRange: InheritanceStore.fromRange(s.selectionRange),
+            methods,
+            bases
+          });
         }
+        if (s.children) await processSymbols(s.children);
+      }
     }
 
     await processSymbols(symbols);
@@ -135,31 +173,31 @@ export async function activate(context: vscode.ExtensionContext) {
     const files = await vscode.workspace.findFiles('**/*.py', '**/node_modules/**');
     const total = files.length;
     for (let i = 0; i < total; i++) {
-        if (token.isCancellationRequested) break;
-        const file = files[i];
-        progress.report({ message: `${Math.round((i/total)*100)}% - ${path.basename(file.fsPath)}`, increment: 100/total });
-        
-        try {
-            const stat = await vscode.workspace.fs.stat(file);
-            const cached = store.get(file);
-            if (cached && cached.mtime === stat.mtime) continue;
+      if (token.isCancellationRequested) break;
+      const file = files[i];
+      progress.report({ message: `${Math.round((i / total) * 100)}% - ${path.basename(file.fsPath)}`, increment: 100 / total });
 
-            const doc = await vscode.workspace.openTextDocument(file);
-            const data = await analyzeFile(doc);
-            if (data) {
-                data.mtime = stat.mtime;
-                store.set(file, data);
-            }
-            if (i % 20 === 0 && vscode.window.activeTextEditor) {
-                updateDecorations(vscode.window.activeTextEditor);
-                codeLensProvider.refresh();
-            }
-        } catch (e) {}
+      try {
+        const stat = await vscode.workspace.fs.stat(file);
+        const cached = store.get(file);
+        if (cached && cached.mtime === stat.mtime) continue;
+
+        const doc = await vscode.workspace.openTextDocument(file);
+        const data = await analyzeFile(doc);
+        if (data) {
+          data.mtime = stat.mtime;
+          store.set(file, data);
+        }
+        if (i % 20 === 0 && vscode.window.activeTextEditor) {
+          updateDecorations(vscode.window.activeTextEditor);
+          codeLensProvider.refresh();
+        }
+      } catch (e) { }
     }
     await store.save();
     if (vscode.window.activeTextEditor) {
-        updateDecorations(vscode.window.activeTextEditor);
-        codeLensProvider.refresh();
+      updateDecorations(vscode.window.activeTextEditor);
+      codeLensProvider.refresh();
     }
   });
 
@@ -172,10 +210,10 @@ export async function activate(context: vscode.ExtensionContext) {
       if (doc.languageId !== 'python') return;
       const data = await analyzeFile(doc);
       if (data) {
-          const stat = await vscode.workspace.fs.stat(doc.uri);
-          data.mtime = stat.mtime;
-          store.set(doc.uri, data);
-          await store.save();
+        const stat = await vscode.workspace.fs.stat(doc.uri);
+        data.mtime = stat.mtime;
+        store.set(doc.uri, data);
+        await store.save();
       }
       if (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document === doc) {
         updateDecorations(vscode.window.activeTextEditor);
@@ -196,16 +234,16 @@ export async function activate(context: vscode.ExtensionContext) {
         await vscode.window.showTextDocument(doc, { selection: InheritanceStore.toRange(target.selectionRange) });
       } else {
         const items = targets.map(target => ({
-            label: `${target.className}`,
-            description: vscode.workspace.asRelativePath(vscode.Uri.parse(target.uri)),
-            detail: `Line ${target.selectionRange.startLine + 1}`,
-            target: target
+          label: `${target.className}`,
+          description: vscode.workspace.asRelativePath(vscode.Uri.parse(target.uri)),
+          detail: `Line ${target.selectionRange.startLine + 1}`,
+          target: target
         }));
         const pick = await vscode.window.showQuickPick(items, { title });
         if (pick) {
-            const uri = vscode.Uri.parse(pick.target.uri);
-            const doc = await vscode.workspace.openTextDocument(uri);
-            await vscode.window.showTextDocument(doc, { selection: InheritanceStore.toRange(pick.target.selectionRange) });
+          const uri = vscode.Uri.parse(pick.target.uri);
+          const doc = await vscode.workspace.openTextDocument(uri);
+          await vscode.window.showTextDocument(doc, { selection: InheritanceStore.toRange(pick.target.selectionRange) });
         }
       }
     })
@@ -226,40 +264,40 @@ class InheritanceCodeLensProvider implements vscode.CodeLensProvider {
 
     const lenses: vscode.CodeLens[] = [];
     for (const node of fileData.classes) {
-        const mro = store.getFullMRO(document.uri.toString(), node.className);
-        const subClasses = store.getSubclasses(document.uri.toString(), node.className);
+      const mro = store.getFullMRO(document.uri.toString(), node.className);
+      const subClasses = store.getSubclasses(document.uri.toString(), node.className);
 
-        for (const method of node.methods) {
-            const range = InheritanceStore.toRange(method.range);
-            
-            // Find base implementations
-            const supers = mro
-                .map(p => ({ class: p, method: p.methods.find(m => m.name === method.name) }))
-                .filter(x => x.method)
-                .map(x => ({ ...x.method!, uri: x.class.uri, className: x.class.className }));
+      for (const method of node.methods) {
+        const range = InheritanceStore.toRange(method.range);
 
-            if (supers.length > 0) {
-                lenses.push(new vscode.CodeLens(range, {
-                    title: `↑ overrides ${supers.length} base definitions`,
-                    command: 'pythonInheritance.showTargets',
-                    arguments: [supers, 'Base implementations']
-                }));
-            }
+        // Find base implementations
+        const supers = mro
+          .map(p => ({ class: p, method: p.methods.find(m => m.name === method.name) }))
+          .filter(x => x.method)
+          .map(x => ({ ...x.method!, uri: x.class.uri, className: x.class.className }));
 
-            // Find subclass overrides
-            const subs = subClasses
-                .map(s => ({ class: s, method: s.methods.find(m => m.name === method.name) }))
-                .filter(x => x.method)
-                .map(x => ({ ...x.method!, uri: x.class.uri, className: x.class.className }));
-
-            if (subs.length > 0) {
-                lenses.push(new vscode.CodeLens(range, {
-                    title: `↓ overridden in ${subs.length} subclasses`,
-                    command: 'pythonInheritance.showTargets',
-                    arguments: [subs, 'Overridden in subclasses']
-                }));
-            }
+        if (supers.length > 0) {
+          lenses.push(new vscode.CodeLens(range, {
+            title: `↑ overrides ${supers.length} base definitions`,
+            command: 'pythonInheritance.showTargets',
+            arguments: [supers, 'Base implementations']
+          }));
         }
+
+        // Find subclass overrides
+        const subs = subClasses
+          .map(s => ({ class: s, method: s.methods.find(m => m.name === method.name) }))
+          .filter(x => x.method)
+          .map(x => ({ ...x.method!, uri: x.class.uri, className: x.class.className }));
+
+        if (subs.length > 0) {
+          lenses.push(new vscode.CodeLens(range, {
+            title: `↓ overridden in ${subs.length} subclasses`,
+            command: 'pythonInheritance.showTargets',
+            arguments: [subs, 'Overridden in subclasses']
+          }));
+        }
+      }
     }
     return lenses;
   }
