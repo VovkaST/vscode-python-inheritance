@@ -10,6 +10,7 @@ let changeTimeout: NodeJS.Timeout | undefined;
 const pendingBases = new Set<{ uri: string, className: string, baseName: string, line: number, character: number }>();
 const resolutionCache = new Map<string, string>(); // name#contextDoc -> targetUri
 const globalResolutionCache = new Map<string, string>(); // baseName -> targetUri (Global for dotted names)
+const dirResolutionCache = new Map<string, string>(); // dirPath#baseName -> targetUri (Contextual for simple names)
 const projectClassIndex = new Map<string, string[]>(); // className -> URI[]
 
 const BUILTIN_TYPES = new Set([
@@ -53,7 +54,7 @@ class Semaphore {
   }
 }
 
-const pylanceSemaphore = new Semaphore(8);
+const pylanceSemaphore = new Semaphore(10); // Slightly increased concurrency
 
 export async function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Python Inheritance', { log: true });
@@ -381,25 +382,39 @@ export async function activate(context: vscode.ExtensionContext) {
 
       const baseSimpleName = item.baseName.includes('.') ? item.baseName.split('.').pop()! : item.baseName;
       const isDotted = item.baseName.includes('.');
+      const itemUri = vscode.Uri.parse(item.uri);
+      const itemDir = path.dirname(itemUri.fsPath);
 
+      // Tier 1: Global Cache (Dotted)
       let targetUriStr = isDotted ? globalResolutionCache.get(item.baseName) : undefined;
 
+      // Tier 2: Directory Cache (Contextual simple names)
       if (!targetUriStr) {
-        const cacheKey = `${item.baseName}#${item.uri}`;
-        targetUriStr = resolutionCache.get(cacheKey);
+        targetUriStr = dirResolutionCache.get(`${itemDir}#${item.baseName}`);
+      }
+
+      // Tier 3: File-specific cache
+      if (!targetUriStr) {
+        targetUriStr = resolutionCache.get(`${item.baseName}#${item.uri}`);
       }
 
       if (!targetUriStr) {
+        // Tier 4: Fast Project Index (O(1))
         const localMatches = projectClassIndex.get(baseSimpleName) || [];
 
         if (localMatches.length === 1 && !isDotted) {
           targetUriStr = localMatches[0];
+          // If unambiguous project class, cache it for the directory
+          dirResolutionCache.set(`${itemDir}#${item.baseName}`, targetUriStr);
         } else {
-          const uriObj = vscode.Uri.parse(item.uri);
-          const deepDef = await resolveSymbolDeeply(uriObj, new vscode.Position(item.line, item.character));
+          // Tier 5: Fallback to Pylance (Semantic)
+          const deepDef = await resolveSymbolDeeply(itemUri, new vscode.Position(item.line, item.character));
           if (deepDef) {
             targetUriStr = deepDef.uri.toString();
+
+            // Populate caches based on result
             if (isDotted) globalResolutionCache.set(item.baseName, targetUriStr);
+            dirResolutionCache.set(`${itemDir}#${item.baseName}`, targetUriStr);
 
             if (!store.get(deepDef.uri)) {
               const libData = await analyzeFile(deepDef.uri, true);
@@ -412,7 +427,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       if (targetUriStr) {
-        const fileData = store.get(vscode.Uri.parse(item.uri));
+        const fileData = store.get(itemUri);
         if (fileData) {
           const cls = fileData.classes.find(c => c.className === item.className);
           if (cls) {
@@ -426,14 +441,15 @@ export async function activate(context: vscode.ExtensionContext) {
     });
 
     let completed = 0;
-    await limitConcurrency(tasks, 12, (count) => {
+    // Increased concurrency for resolution slightly
+    await limitConcurrency(tasks, 16, (count) => {
       completed++;
       if (completed % 250 === 0) {
         progress.report({ message: `Resolving: ${completed}/${total}` });
-        if (completed % 1000 === 0) store.save();
       }
     });
 
+    // Persistent save only ONCE at the end of phase 2
     await store.save();
     outputChannel.info(`Background resolution completed.`);
   }
@@ -514,7 +530,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
       await resolvePendingBases(token, progress);
       if (vscode.window.activeTextEditor) updateDecorations(vscode.window.activeTextEditor);
-      codeLensProvider.refresh();
+      const codeLensProvider = context.subscriptions.find(s => (s as any).refresh) as any;
+      if (codeLensProvider) codeLensProvider.refresh();
+
       outputChannel.info(`Total indexing completed in ${Date.now() - startTime}ms.`);
     });
   }
@@ -570,14 +588,13 @@ export async function activate(context: vscode.ExtensionContext) {
         const uri = vscode.Uri.parse(uriStr);
         const relPath = vscode.workspace.asRelativePath(uri);
 
-        // If it's a library (contains site-packages), make it pretty
         if (uriStr.includes('site-packages')) {
           const parts = uriStr.split('site-packages');
           return parts[parts.length - 1].replace(/^[\\\/]/, '');
         } else if (uriStr.includes('dist-packages')) {
           const parts = uriStr.split('dist-packages');
           return parts[parts.length - 1].replace(/^[\\\/]/, '');
-        } else if (uriStr.includes('lib/python')) { // Standard library fallback
+        } else if (uriStr.includes('lib/python')) {
           const parts = uriStr.split(/lib\/python\d\.\d+/);
           return parts[parts.length - 1].replace(/^[\\\/]/, '');
         }
@@ -587,18 +604,18 @@ export async function activate(context: vscode.ExtensionContext) {
 
       const jumpTo = async (target: any) => {
         const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(target.uri));
-        const editor = await vscode.window.showTextDocument(doc);
         const range = InheritanceStore.toRange(target.range);
-        editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-        editor.selection = new vscode.Selection(range.start, range.start);
+
+        await vscode.window.showTextDocument(doc, {
+          selection: new vscode.Range(range.start, range.start),
+          preview: true
+        });
       };
 
-      // Rule 1: If only 1 target, jump immediately
       if (targets.length === 1) {
         return await jumpTo(targets[0]);
       }
 
-      // Rule 2: Show formatted list
       const items = targets.map(t => ({
         label: `${t.className}.${t.name}`,
         description: formatPath(t.uri),
@@ -626,10 +643,10 @@ export async function activate(context: vscode.ExtensionContext) {
       if (mro.length > 0) {
         const target = mro[0];
         const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(target.uri));
-        const targetEditor = await vscode.window.showTextDocument(doc);
         const range = InheritanceStore.toRange(target.selectionRange);
-        targetEditor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-        targetEditor.selection = new vscode.Selection(range.start, range.start);
+        await vscode.window.showTextDocument(doc, {
+          selection: new vscode.Range(range.start, range.start)
+        });
       }
     }),
 
@@ -648,10 +665,10 @@ export async function activate(context: vscode.ExtensionContext) {
       if (subs.length > 0) {
         const target = subs[0];
         const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(target.uri));
-        const targetEditor = await vscode.window.showTextDocument(doc);
         const range = InheritanceStore.toRange(target.selectionRange);
-        targetEditor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-        targetEditor.selection = new vscode.Selection(range.start, range.start);
+        await vscode.window.showTextDocument(doc, {
+          selection: new vscode.Range(range.start, range.start)
+        });
       }
     })
   );
