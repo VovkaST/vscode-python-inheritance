@@ -7,9 +7,9 @@ export interface InheritanceInfo {
 
 export class PythonAnalyzer {
   /**
-   * Finds base class implementations of a given method.
+   * Finds base class implementations of a given member (method or variable).
    */
-  static async findSuperImplementations(uri: vscode.Uri, position: vscode.Position, methodName: string): Promise<vscode.Location[]> {
+  static async findSuperImplementations(uri: vscode.Uri, position: vscode.Position, memberName: string, memberKind?: vscode.SymbolKind): Promise<vscode.Location[]> {
     let superItems: vscode.TypeHierarchyItem[] = [];
 
     try {
@@ -39,7 +39,7 @@ export class PythonAnalyzer {
     if (superItems.length > 0) {
       // Standard approach using TypeHierarchy
       for (const parent of superItems) {
-        const loc = await this.findMethodInFile(parent.uri, parent.name, methodName);
+        const loc = await this.findMemberInFile(parent.uri, parent.name, memberName, memberKind);
         if (loc) superLocs.push(loc);
       }
     } else {
@@ -116,7 +116,7 @@ export class PythonAnalyzer {
             const def = definitions[0];
             const baseUri = 'uri' in def ? def.uri : def.targetUri;
             const baseClassName = baseName.includes('.') ? baseName.split('.').pop()! : baseName;
-            const loc = await this.findMethodInFile(baseUri, baseClassName, methodName);
+            const loc = await this.findMemberInFile(baseUri, baseClassName, memberName, memberKind);
             if (loc) superLocs.push(loc);
           }
         }
@@ -127,28 +127,31 @@ export class PythonAnalyzer {
   }
 
   /**
-   * Helper to find a method within a specific class in a file.
+   * Helper to find a member within a specific class in a file.
    */
-  private static async findMethodInFile(uri: vscode.Uri, className: string, methodName: string): Promise<vscode.Location | undefined> {
+  private static async findMemberInFile(uri: vscode.Uri, className: string, memberName: string, memberKind?: vscode.SymbolKind): Promise<vscode.Location | undefined> {
     const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
       'vscode.executeDocumentSymbolProvider',
       uri
     );
     if (!symbols) return undefined;
 
-    const findMethod = (syms: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
+    const findMember = (syms: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
       for (const s of syms) {
         if (s.name === className && (s.kind === vscode.SymbolKind.Class || s.kind === vscode.SymbolKind.Interface)) {
-          return s.children.find(child => child.name === methodName && (child.kind === vscode.SymbolKind.Method || child.kind === vscode.SymbolKind.Function));
+          return s.children.find(child =>
+            child.name === memberName &&
+            (!memberKind || child.kind === memberKind)
+          );
         }
-        const found = findMethod(s.children);
+        const found = findMember(s.children);
         if (found) return found;
       }
       return undefined;
     };
 
-    const methodSym = findMethod(symbols);
-    return methodSym ? new vscode.Location(uri, methodSym.selectionRange) : undefined;
+    const memberSym = findMember(symbols);
+    return memberSym ? new vscode.Location(uri, memberSym.selectionRange) : undefined;
   }
 
   /**
