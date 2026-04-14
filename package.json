@@ -2,7 +2,7 @@
   "name": "vscode-python-inheritance",
   "displayName": "Python Inheritance Visualizer",
   "description": "Visualize Python class inheritance and method overrides with Gutter icons and CodeLens, just like in PyCharm.",
-  "version": "0.2.9",
+  "version": "0.3.1",
   "license": "MIT",
   "publisher": "KorotkoVladimir",
   "repository": {
@@ -41,7 +41,47 @@
         "command": "pythonInheritance.reindex",
         "title": "Python Inheritance: Reindex Project"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Python Inheritance",
+      "properties": {
+        "pythonInheritance.analyzeExternalLibraries": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to analyze external libraries (standard and third party) for inheritance. Enabling this provides better visibility into base classes from packages like 'json' or 'abc'."
+        },
+        "pythonInheritance.visualizeClassVariables": {
+          "type": "boolean",
+          "default": true,
+          "description": "Visualize overrides and implementations for class variables/fields."
+        },
+        "pythonInheritance.visualizeMethods": {
+          "type": "boolean",
+          "default": true,
+          "description": "Visualize overrides and implementations for methods."
+        },
+        "pythonInheritance.indexingStrategy": {
+          "type": "string",
+          "default": "onSave",
+          "enum": [
+            "onSave",
+            "onType",
+            "manual"
+          ],
+          "enumDescriptions": [
+            "Update index when a file is saved.",
+            "Update index automatically while typing (with a small delay).",
+            "Only update manually using the 'Reindex Project' command or when opening the file."
+          ],
+          "description": "When to automatically update the inheritance index for the current file."
+        },
+        "pythonInheritance.indexOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Perform a background scan of all Python files in the workspace on extension startup."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "yarn run compile",

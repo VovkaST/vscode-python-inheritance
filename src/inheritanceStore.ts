@@ -27,42 +27,68 @@ export interface FileData {
   classes: ClassNode[];
 }
 
+export interface StoredData {
+  version: string;
+  files: Record<string, FileData>;
+}
+
 export class InheritanceStore {
   public static readonly STORAGE_KEY = 'pythonInheritanceGraph';
   private cache: Map<string, FileData> = new Map();
+  public readonly version: string;
 
   constructor(private context: vscode.ExtensionContext) {
+    this.version = context.extension.packageJSON.version;
     this.load();
   }
 
   private load() {
-    const stored = this.context.workspaceState.get<Record<string, any>>(InheritanceStore.STORAGE_KEY);
+    const stored = this.context.workspaceState.get<any>(InheritanceStore.STORAGE_KEY);
     if (stored) {
-      // Migrate old data if necessary
-      for (const fileUri in stored) {
-        const fileData = stored[fileUri];
+      let files: Record<string, any>;
+
+      // Handle migration from old format (Record<string, FileData>) to new format (StoredData)
+      if (stored.version && stored.files) {
+        files = stored.files;
+        if (stored.version !== this.version) {
+          console.log(`[InheritanceStore] Version mismatch: stored=${stored.version}, current=${this.version}`);
+          // Potential migration logic here
+        }
+      } else {
+        files = stored;
+      }
+
+      for (const fileUri in files) {
+        const fileData = files[fileUri];
         if (fileData.classes) {
           for (const node of fileData.classes) {
+            // Existing migration for members/methods
             if ((node as any).methods && !node.members) {
               node.members = (node as any).methods.map((m: any) => ({
                 ...m,
-                kind: m.kind || vscode.SymbolKind.Method // Default to Method for old data
+                kind: m.kind || vscode.SymbolKind.Method
               }));
               delete (node as any).methods;
             }
           }
         }
       }
-      this.cache = new Map(Object.entries(stored));
+      this.cache = new Map(Object.entries(files));
     }
   }
 
   public async save() {
-    const obj: Record<string, FileData> = {};
+    const files: Record<string, FileData> = {};
     for (const [uri, data] of this.cache) {
-      obj[uri] = data;
+      files[uri] = data;
     }
-    await this.context.workspaceState.update(InheritanceStore.STORAGE_KEY, obj);
+
+    const storedData: StoredData = {
+      version: this.version,
+      files
+    };
+
+    await this.context.workspaceState.update(InheritanceStore.STORAGE_KEY, storedData);
   }
 
   public get(uri: vscode.Uri): FileData | undefined {

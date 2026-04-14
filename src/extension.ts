@@ -1,10 +1,10 @@
-import * as vscode from 'vscode';
 import * as path from 'path';
-import { PythonAnalyzer } from './analyzer';
-import { InheritanceStore, FileData, ClassNode } from './inheritanceStore';
+import * as vscode from 'vscode';
+import { ClassNode, FileData, InheritanceStore } from './inheritanceStore';
 
 let store: InheritanceStore;
 let outputChannel: vscode.LogOutputChannel;
+let changeTimeout: NodeJS.Timeout | undefined;
 
 const BUILTIN_TYPES = new Set([
   'object', 'type', 'classmethod', 'staticmethod', 'property',
@@ -15,6 +15,7 @@ export async function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Python Inheritance', { log: true });
   outputChannel.info('Extension "vscode-python-inheritance" is now active!');
   store = new InheritanceStore(context);
+  outputChannel.info(`Version ${store.version} is now ready!`);
 
   const overridesDecorationType = vscode.window.createTextEditorDecorationType({
     gutterIconPath: context.asAbsolutePath(path.join('resources', 'overrides.svg')),
@@ -46,8 +47,16 @@ export async function activate(context: vscode.ExtensionContext) {
     gutterIconSize: 'contain'
   });
 
+  function getConfiguration() {
+    return vscode.workspace.getConfiguration('pythonInheritance');
+  }
+
   async function updateDecorations(editor: vscode.TextEditor) {
     if (editor.document.languageId !== 'python') return;
+
+    const config = getConfiguration();
+    const showVars = config.get<boolean>('visualizeClassVariables', true);
+    const showMethods = config.get<boolean>('visualizeMethods', true);
 
     let fileData = store.get(editor.document.uri);
     if (!fileData) {
@@ -74,6 +83,9 @@ export async function activate(context: vscode.ExtensionContext) {
       for (const member of node.members || []) {
         const range = InheritanceStore.toRange(member.selectionRange);
         const isMethod = member.kind === vscode.SymbolKind.Method || member.kind === vscode.SymbolKind.Function;
+
+        if (isMethod && !showMethods) continue;
+        if (!isMethod && !showVars) continue;
 
         const isOverride = mro.some(p => p.members?.some(pm => pm.name === member.name));
         const isOverridden = subClasses.some(s => s.members?.some(sm => sm.name === member.name));
@@ -147,6 +159,11 @@ export async function activate(context: vscode.ExtensionContext) {
     }
     visitedUris.add(document.uri.toString());
 
+    const config = getConfiguration();
+    const analyzeExternal = config.get<boolean>('analyzeExternalLibraries', true);
+    const showVars = config.get<boolean>('visualizeClassVariables', true);
+    const showMethods = config.get<boolean>('visualizeMethods', true);
+
     outputChannel.info(`Starting analysis for: ${document.uri.toString()} (depth: ${depth})`);
 
     const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
@@ -165,15 +182,19 @@ export async function activate(context: vscode.ExtensionContext) {
       for (const s of syms) {
         if (s.kind === vscode.SymbolKind.Class || s.kind === vscode.SymbolKind.Interface) {
           const members = s.children
-            .filter(c =>
-              c.kind === vscode.SymbolKind.Method ||
-              c.kind === vscode.SymbolKind.Function ||
-              c.kind === vscode.SymbolKind.Variable ||
-              c.kind === vscode.SymbolKind.Field ||
-              c.kind === vscode.SymbolKind.Property ||
-              c.kind === vscode.SymbolKind.EnumMember ||
-              c.kind === vscode.SymbolKind.Constant
-            )
+            .filter(c => {
+              const isMethod = c.kind === vscode.SymbolKind.Method || c.kind === vscode.SymbolKind.Function;
+              const isVariable = c.kind === vscode.SymbolKind.Variable ||
+                c.kind === vscode.SymbolKind.Field ||
+                c.kind === vscode.SymbolKind.Property ||
+                c.kind === vscode.SymbolKind.EnumMember ||
+                c.kind === vscode.SymbolKind.Constant;
+
+              if (isMethod && !showMethods) return false;
+              if (isVariable && !showVars) return false;
+
+              return isMethod || isVariable;
+            })
             .map(m => ({
               name: m.name,
               kind: m.kind,
@@ -228,6 +249,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
               outputChannel.info(`[Inheritance] Resolving base class: "${name}" at ${document.uri.toString()}:${baseLine}:${baseChar}`);
 
+              // Check if we should analyze external libraries
+              const isExternal = name.includes('.'); // Simple heuristic, better detection would be needed
+              if (!analyzeExternal && isExternal) {
+                outputChannel.info(`[Inheritance] Skipping external library resolution for "${name}" (disabled in settings)`);
+                continue;
+              }
+
               const deepDef = await resolveSymbolDeeply(document.uri, new vscode.Position(baseLine, baseChar));
 
               if (!deepDef) {
@@ -236,6 +264,14 @@ export async function activate(context: vscode.ExtensionContext) {
               }
 
               const { uri, range } = deepDef;
+
+              // Second check: is the resolved URI within workspace?
+              const isUriExternal = !vscode.workspace.getWorkspaceFolder(uri);
+              if (!analyzeExternal && isUriExternal) {
+                outputChannel.info(`[Inheritance] Skipping resolution for external file: ${uri.toString()} (disabled in settings)`);
+                continue;
+              }
+
               outputChannel.info(`[Inheritance] Resolved deeper definition: ${uri.toString()}`);
 
               if (!store.get(uri)) {
@@ -323,7 +359,9 @@ export async function activate(context: vscode.ExtensionContext) {
     });
   }
 
-  runIndexing();
+  if (getConfiguration().get<boolean>('indexOnStartup', true)) {
+    runIndexing();
+  }
 
   if (vscode.window.activeTextEditor) {
     updateDecorations(vscode.window.activeTextEditor);
@@ -332,6 +370,8 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(async (doc: vscode.TextDocument) => {
       if (doc.languageId !== 'python') return;
+      if (getConfiguration().get<string>('indexingStrategy') !== 'onSave') return;
+
       const data = await analyzeFile(doc, 0);
       if (data) {
         const stat = await vscode.workspace.fs.stat(doc.uri);
@@ -344,8 +384,52 @@ export async function activate(context: vscode.ExtensionContext) {
         codeLensProvider.refresh();
       }
     }),
+    vscode.workspace.onDidChangeTextDocument(async (event) => {
+      if (event.document.languageId !== 'python') return;
+      if (getConfiguration().get<string>('indexingStrategy') !== 'onType') return;
+
+      if (changeTimeout) clearTimeout(changeTimeout);
+      changeTimeout = setTimeout(async () => {
+        outputChannel.info(`Debounced indexing for ${event.document.uri.toString()}`);
+        const data = await analyzeFile(event.document, 0);
+        if (data) {
+          store.set(event.document.uri, data);
+        }
+        if (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document === event.document) {
+          updateDecorations(vscode.window.activeTextEditor);
+          codeLensProvider.refresh();
+        }
+      }, 1500);
+    }),
     vscode.window.onDidChangeActiveTextEditor((editor: vscode.TextEditor | undefined) => {
       if (editor) updateDecorations(editor);
+    }),
+    vscode.workspace.onDidChangeConfiguration(async (e) => {
+      if (e.affectsConfiguration('pythonInheritance')) {
+        outputChannel.info('Configuration changed, updating all editors...');
+
+        // Refresh decorations
+        vscode.window.visibleTextEditors.forEach(editor => {
+          if (editor.document.languageId === 'python') {
+            updateDecorations(editor);
+          }
+        });
+        codeLensProvider.refresh();
+
+        // Ask for reindexing if critical settings changed
+        if (e.affectsConfiguration('pythonInheritance.visualizeClassVariables') ||
+          e.affectsConfiguration('pythonInheritance.visualizeMethods') ||
+          e.affectsConfiguration('pythonInheritance.analyzeExternalLibraries')) {
+
+          const selection = await vscode.window.showInformationMessage(
+            'Visualization or library analysis settings have changed. Re-index the project to update data?',
+            'Yes', 'No'
+          );
+          if (selection === 'Yes') {
+            vscode.commands.executeCommand('pythonInheritance.reindex');
+          }
+        }
+      }
     })
   );
 
@@ -393,12 +477,22 @@ class InheritanceCodeLensProvider implements vscode.CodeLensProvider {
     const fileData = store.get(document.uri);
     if (!fileData) return [];
 
+    const config = vscode.workspace.getConfiguration('pythonInheritance');
+    const showVars = config.get<boolean>('visualizeClassVariables', true);
+    const showMethods = config.get<boolean>('visualizeMethods', true);
+
     const lenses: vscode.CodeLens[] = [];
     for (const node of fileData.classes) {
       const mro = store.getFullMRO(document.uri.toString(), node.className);
       const subClasses = store.getSubclasses(document.uri.toString(), node.className);
 
       for (const member of node.members || []) {
+        const isMethod = member.kind === vscode.SymbolKind.Method || member.kind === vscode.SymbolKind.Function;
+
+        // Skip CodeLens if visualization is disabled for this type
+        if (isMethod && !showMethods) continue;
+        if (!isMethod && !showVars) continue;
+
         const range = InheritanceStore.toRange(member.range);
         const supers = mro
           .map(p => ({ class: p, member: p.members?.find(m => m.name === member.name) }))
