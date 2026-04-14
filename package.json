@@ -2,7 +2,7 @@
   "name": "vscode-python-inheritance",
   "displayName": "Python Inheritance Visualizer",
   "description": "Visualize Python class inheritance and method overrides with Gutter icons and CodeLens, just like in PyCharm.",
-  "version": "0.3.11",
+  "version": "0.3.13",
   "license": "MIT",
   "publisher": "KorotkoVladimir",
   "repository": {

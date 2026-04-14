@@ -2,8 +2,15 @@
 
 All notable changes to the "Python Inheritance Visualizer" extension will be documented in this file.
 
-## [0.3.11] - 2026-04-14
+## [0.3.13] - 2026-04-14
 ### Optimized
+- **Context-Aware Caching**: Implemented a directory-level resolution cache (`dirResolutionCache`). This allows multiple files in the same folder to share a single Pylance resolution for common base classes, drastically reducing semantic overhead.
+- **Improved Persistence**: Background resolution now performs a single atomic save at the end of the phase instead of multiple intermediate disk writes, reducing IO blocking and overall indexing time.
+
+## [0.3.12] - 2026-04-14
+- **Navigation History**: Fixed a bug where jumping to parent/subclass definitions would not save the previous position in VS Code's navigation stack. The "Go Back" command (Alt+Left) now works as expected.
+
+## [0.3.11] - 2026-04-14
 - **Navigation UX**: CodeLens now performs an immediate jump if there is only one inheritance target.
 - **Path Visualization**: Improved target paths in the selection menu. Project files show relative paths, while library files show clean paths relative to `site-packages` or standard library.
 
