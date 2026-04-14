@@ -2,28 +2,43 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Визуализируйте наследование классов и переопределение методов в Python прямо на полях вашего редактора. Аналог функционала PyCharm для VS Code и Cursor.
+Visualize Python class inheritance and method overrides right in your editor's gutter. A powerful PyCharm-like feature for VS Code and Cursor.
 
 ![Demo](./resources/demo.png)
 
-## Основные возможности
+## Main Features
 
-- **Gutter Icons**: Иконки на полях (↑, ↓, ↕) позволяют мгновенно увидеть, переопределен ли метод и имеет ли он свои реализации в подклассах.
-- **CodeLens Ссылки**: Наглядные полупрозрачные ссылки над определением метода для быстрого перехода к родителям или наследникам.
-- **Информативное меню**: Переход к целям с отображением имен классов и относительных путей к файлам.
-  ![QuickPick](./resources/quickpick.png)
-- **Мгновенная работа**: Умное кэширование и фоновая индексация всего проекта на основе графа классов.
-- **Кросс-файловая поддержка**: Отслеживание наследования между разными модулями проекта.
+- **Gutter Icons**: Instant visual cues (↑, ↓, ↕) in the gutter to see if a method is an override or has implementations in subclasses.
+- **CodeLens Links**: Clickable links above methods/variables for quick navigation to parents or children.
+- **Smart Hops**: Support for re-exports and deep resolution through `__init__.py` (Standard & Third-party libraries support).
+- **Class Variables Support**: Visualize overrides for class fields and constants.
+- **High Performance**: Custom graph-based indexing engine that works in the background and respects your CPU/RAM.
+- **Configurable**: Choose what to visualize and when to index.
 
-## Живой пример
+## Customization
 
-Представьте, что у вас есть два файла:
+The extension provides several options to balance performance and visibility:
+
+- **Analyze External Libraries**: Enable/disable deep analysis of system and third-party packages.
+- **Visualize Variables/Methods**: Separately toggle visibility for class fields and methods.
+- **Indexing Strategy**: 
+    - `onType`: Real-time updates as you type (with a smart 1.5s delay).
+    - `onSave`: Update index only when you save a file.
+    - `manual`: For maximum control, update only via command or on file open.
+- **Index on Startup**: Background scan of the whole workspace on extension start.
+
+## How it works
+The extension builds a **high-performance inheritance graph** of your entire project. Unlike other tools, it doesn't overload the Language Server (Pylance) with per-method requests but calculates relations in-memory, ensuring a smooth experience even on large projects.
+
+---
+
+## Example
 
 ### `base.py`
 ```python
 class BaseService:
     def process(self):  # [↓ overridden in 1 subclasses]
-        print("Базовая обработка")
+        print("Base processing")
 ```
 
 ### `service.py`
@@ -32,29 +47,26 @@ from base import BaseService
 
 class PaymentService(BaseService):
     def process(self):  # [↑ overrides BaseService.process]
-        print("Обработка платежа")
+        print("Payment processing")
         super().process()
 ```
 
-В редакторе над методом `process` появятся кликабельные надписи: 
-- В `base.py`: `↓ overridden in 1 subclasses`
-- В `service.py`: `↑ overrides BaseService.process (base.py)`
+In the editor, you will see clickable links and gutter icons:
+- In `base.py`: `↓ overridden in 1 subclasses`
+- In `service.py`: `↑ overrides BaseService.process (base.py)`
 
-## Как это работает (Под капотом)
-Расширение строит **высокопроизводительный граф наследований** всего проекта. В отличие от других инструментов, оно не перегружает Language Server (Pylance) запросами по каждому методу, а вычисляет связи в памяти, что гарантирует плавную работу даже на больших проектах.
+## Installation
 
-## Установка
+1. Download the `.vsix` file from [Releases](https://github.com/KorotkoVladimir/vscode-inheritance/releases).
+2. In VS Code, run: `Extensions: Install from VSIX...`.
+3. Open any Python project and wait for the initial indexing (see notification/Output Channel).
 
-1. Скачайте `.vsix` файл из [Releases](https://github.com/KorotkoVladimir/vscode-inheritance/releases).
-2. В VS Code выполните команду: `Extensions: Install from VSIX...`.
-3. Откройте любой Python-проект и дождитесь завершения первичной индексации (уведомление в углу).
+## Requirements
+- **Python** extension (ms-python.python)
+- **Pylance** language server (Recommended)
 
-## Требования
-- Расширение **Python** (ms-python.python)
-- Языковой сервер **Pylance** (рекомендуется)
-
-## Лицензия
-Данный проект распространяется под лицензией MIT. Подробности в файле [LICENSE](LICENSE).
+## License
+MIT. See [LICENSE](LICENSE) for details.
 
 ---
-Создано с любовью для Python-разработчиков. ❤️
+Built with love for Python developers. ❤️
